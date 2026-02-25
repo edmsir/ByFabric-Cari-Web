@@ -34,15 +34,15 @@ export const exportToExcel = (allAccounts, fileName = 'Cari_Rapor.xlsx') => {
         ];
 
         const formatRow = (acc) => {
-            const currency = (acc.report_currency || 'TL').toUpperCase();
-            const bakiye = currency === 'TL' ? (acc.guncel_bakiye_tl || 0) : (acc.guncel_bakiye_usd || 0);
-            const borcTutar = currency === 'TL' ? (acc.borc_tutar_tl || 0) : (acc.borc_tutar_usd || 0);
+            const currency = (acc.para_birimi || 'TL').toUpperCase();
+            const bakiye = Number(acc.guncel_bakiye || 0);
+            const borcTutar = Number(acc.borc_tutar || 0);
 
             return [
                 acc.cari_kod || '',
                 acc.musteri_adi || '',
                 acc.satis_temsilcisi || '-',
-                currency === 'TL' ? (acc.borc_donemi_tl || '-') : (acc.borc_donemi_usd || '-'),
+                acc.borc_donemi || '-',
                 { v: borcTutar, t: 'n', z: '#,##0.00' },
                 { v: bakiye, t: 'n', z: '#,##0.00' },
                 currency,
@@ -68,15 +68,15 @@ export const exportToExcel = (allAccounts, fileName = 'Cari_Rapor.xlsx') => {
         branches.forEach(branch => {
             const branchRecords = records.filter(acc => acc.sube_adi === branch);
 
-            // TL Carileri: Hem TL çalışanlar hem sadece TL olanlar
+            // TL Carileri
             const branchTL = branchRecords
-                .filter(acc => (acc.report_currency || 'TL').toUpperCase() === 'TL')
-                .sort((a, b) => (b.guncel_bakiye_tl || 0) - (a.guncel_bakiye_tl || 0));
+                .filter(acc => (acc.para_birimi || 'TL').toUpperCase() === 'TL')
+                .sort((a, b) => Number(b.guncel_bakiye || 0) - Number(a.guncel_bakiye || 0));
 
-            // USD Carileri: Hem USD çalışanlar hem sadece USD olanlar
+            // USD Carileri
             const branchUSD = branchRecords
-                .filter(acc => (acc.report_currency || 'TL').toUpperCase() === 'USD')
-                .sort((a, b) => (b.guncel_bakiye_usd || 0) - (a.guncel_bakiye_usd || 0));
+                .filter(acc => (acc.para_birimi || 'TL').toUpperCase() === 'USD')
+                .sort((a, b) => Number(b.guncel_bakiye || 0) - Number(a.guncel_bakiye || 0));
 
             const sheetData = [];
 

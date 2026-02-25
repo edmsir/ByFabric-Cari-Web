@@ -87,7 +87,8 @@ export default function Dashboard() {
     };
 
 
-    const { filteredGroups, stats } = useMemo(() => {
+    // --- Centralized Filtering Logic ---
+    const getFilteredData = (ignoreUIBranchFilter = false) => {
         const grouped = {};
         let debtTL = 0, creditTL = 0, debtUSD = 0, creditUSD = 0, risk = 0, count = 0;
         let dL = 0, dT = 0, dR = 0, dS = 0, dB = 0;
@@ -96,53 +97,58 @@ export default function Dashboard() {
             if (typeof val === 'number') return val;
             if (!val) return 0;
             const str = String(val).trim();
-            // Turkish format: 1.250,50
             if (str.includes('.') && str.includes(',')) return parseFloat(str.replace(/\./g, '').replace(',', '.')) || 0;
             if (str.includes(',')) return parseFloat(str.replace(',', '.')) || 0;
             return parseFloat(str) || 0;
         };
 
-        allAccounts.forEach((acc) => {
+        const flatFiltered = allAccounts.filter(acc => {
             const branch = (acc.sube_adi || 'Diğer').trim();
             const rep = (acc.satis_temsilcisi || '').trim();
 
-            if (rep.includes('DİKKATE ALMA')) return;
-            if (branch.toUpperCase().includes('BİLİNMEYEN') || branch === 'Diğer') return;
+            if (rep.includes('DİKKATE ALMA')) return false;
+            if (branch.toUpperCase().includes('BİLİNMEYEN') || branch === 'Diğer') return false;
 
             const isSearching = search.trim().length > 0;
             const searchTerm = isSearching ? search.toLowerCase().toLocaleLowerCase('tr-TR') : '';
 
-            // --- RBAC MANDATORY FILTERS ---
+            // --- RBAC MANDATORY FILTERS (Security) ---
             if (role === 'sales_rep') {
-                if (rep !== profile?.assigned_sales_rep) return;
+                if (rep !== profile?.assigned_sales_rep) return false;
             }
             if (role === 'branch_manager') {
-                if (branch !== profile?.assigned_branch) return;
+                if (branch !== profile?.assigned_branch) return false;
             }
 
+            // --- UI FILTERS ---
             if (!isSearching) {
-                if (branchFilter !== 'ALL' && branch !== branchFilter) { dB++; return; }
-                if (salesRep !== 'ALL' && rep !== salesRep) { dR++; return; }
+                // EXCEL handles all authorized branches, so we ignore branchFilter if requested
+                if (!ignoreUIBranchFilter && branchFilter !== 'ALL' && branch !== branchFilter) { dB++; return false; }
+                if (salesRep !== 'ALL' && rep !== salesRep) { dR++; return false; }
             }
 
             const bakiye = parseNum(acc.guncel_bakiye);
             const reportCurrency = (acc.para_birimi || 'TL').trim().toUpperCase();
             const minLimit = reportCurrency === 'TL' ? minTL : minUSD;
 
-            if (Math.abs(bakiye) < minLimit) { dL++; return; }
-            if (balanceType === 'BB' && bakiye <= 0) { dT++; return; }
-            if (balanceType === 'AB' && bakiye >= 0) { dT++; return; }
+            if (Math.abs(bakiye) < minLimit) { dL++; return false; }
+            if (balanceType === 'BB' && bakiye <= 0) { dT++; return false; }
+            if (balanceType === 'AB' && bakiye >= 0) { dT++; return false; }
 
             if (isSearching) {
                 const matchName = acc.musteri_adi?.toLowerCase().toLocaleLowerCase('tr-TR').includes(searchTerm);
                 const matchCode = acc.cari_kod?.toLowerCase().includes(searchTerm);
-                if (!matchName && !matchCode) {
-                    dS++;
-                    return;
-                }
+                if (!matchName && !matchCode) { dS++; return false; }
             }
 
-            // --- Stats Calculation for Performance Scorecard ---
+            return true;
+        });
+
+        flatFiltered.forEach(acc => {
+            const branch = acc.sube_adi;
+            const reportCurrency = (acc.para_birimi || 'TL').trim().toUpperCase();
+            const bakiye = parseNum(acc.guncel_bakiye);
+
             if (!grouped[branch]) {
                 const branchReport = reportData.filter(r => r.sube_adi === branch);
                 const tSatis = branchReport.reduce((sum, r) => sum + Number(r.toplam_satis || 0), 0);
@@ -173,39 +179,37 @@ export default function Dashboard() {
             if (bakiye > 0) {
                 target.BB.push(acc);
                 target.totalDebt += bakiye;
-                if (reportCurrency === 'TL') { debtTL += bakiye; }
-                else { debtUSD += bakiye; }
+                if (reportCurrency === 'TL') debtTL += bakiye; else debtUSD += bakiye;
             } else if (bakiye < 0) {
                 target.AB.push(acc);
                 target.totalCredit += Math.abs(bakiye);
-                if (reportCurrency === 'TL') creditTL += Math.abs(bakiye);
-                else creditUSD += Math.abs(bakiye);
+                if (reportCurrency === 'TL') creditTL += Math.abs(bakiye); else creditUSD += Math.abs(bakiye);
             }
 
             if (acc.durum === 'Takipte' || acc.durum === 'Olumsuz') risk++;
             count++;
         });
 
-        // Bakiyeleri büyükten küçüğe sırala
+        // Sorting
         Object.values(grouped).forEach(branch => {
             ['TL', 'USD'].forEach(cur => {
-                // BB: En yüksek borç en üstte
-                branch[cur].BB.sort((a, b) => (parseNum(b.guncel_bakiye)) - (parseNum(a.guncel_bakiye)));
-                // AB: En yüksek alacak (mutlak değerce büyük olan) en üstte
+                branch[cur].BB.sort((a, b) => parseNum(b.guncel_bakiye) - parseNum(a.guncel_bakiye));
                 branch[cur].AB.sort((a, b) => Math.abs(parseNum(b.guncel_bakiye)) - Math.abs(parseNum(a.guncel_bakiye)));
             });
         });
-
-        console.log('🔍 Filter Debug:', { total: allAccounts.length, visible: count, dropped: { limit: dL, type: dT, rep: dR, search: dS, branch: dB } });
 
         const netUSD = (debtTL / usdRate + debtUSD) - (creditTL / usdRate + creditUSD);
         const netTL = (debtTL + debtUSD * usdRate) - (creditTL + creditUSD * usdRate);
 
         return {
             filteredGroups: grouped,
+            flatFiltered,
             stats: { totalDebtTL: debtTL, totalCreditTL: creditTL, totalDebtUSD: debtUSD, totalCreditUSD: creditUSD, netUSD, netTL, riskCount: risk, totalCount: count }
         };
-    }, [allAccounts, minTL, minUSD, usdRate, balanceType, salesRep, branchFilter, search]);
+    };
+
+    const { filteredGroups, flatFiltered, stats } = useMemo(() => getFilteredData(false),
+        [allAccounts, minTL, minUSD, usdRate, balanceType, salesRep, branchFilter, search, role, profile]);
 
     // Şube değişince otomatik para birimi seçimi
     useEffect(() => {
@@ -223,7 +227,8 @@ export default function Dashboard() {
     }, [expandedBranch, filteredGroups]);
 
     const handleExport = () => {
-        exportToExcel(allAccounts, `Cari_Rapor_${new Date().toISOString().split('T')[0]}.xlsx`);
+        const { flatFiltered } = getFilteredData(true); // ignore branch filter for excel
+        exportToExcel(flatFiltered, `Cari_Rapor_${new Date().toISOString().split('T')[0]}.xlsx`);
     };
 
     const handleAIAnalysis = async () => {
